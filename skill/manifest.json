@@ -1,0 +1,53 @@
+{
+  "name": "hybrid-routing",
+  "version": "1.2.0",
+  "description": "Route each task to the right model across cloud, on-device and org-hosted stacks, with an enforced egress boundary.",
+  "pack": "scout-plugin-hybrid-routing",
+  "entrypoint": "SKILL.md",
+  "engine": "../hybrid_routing/cli.py",
+  "mcp_server": "../hybrid_routing/mcp_server.py",
+  "distribution": "local-only",
+  "input": "Task text, plus an optional MIP sensitivity label and M365 provenance.",
+  "outputs": [
+    "routing decision (JSON)",
+    "backend probe report (JSON)"
+  ],
+  "provides_tools": [
+    "route_classify",
+    "route_status",
+    "route_test",
+    "route_probe",
+    "route_infer"
+  ],
+  "commands": [
+    "classify",
+    "status",
+    "probe",
+    "infer",
+    "init",
+    "test"
+  ],
+  "exit_codes": {
+    "0": "routed",
+    "1": "blocked by egress policy",
+    "2": "not configured",
+    "3": "error"
+  },
+  "runtime": {
+    "python": ">=3.10",
+    "third_party_packages": [
+      "PyYAML"
+    ]
+  },
+  "config": {
+    "shipped_default": "../data/routing_config.yaml",
+    "user_override": "~/.scout/hybrid_routing/routing_config.yaml",
+    "env_override": "SCOUT_HYBRID_ROUTING_CONFIG"
+  },
+  "tests": "../tests/test_hybrid_routing.py",
+  "network_required": false,
+  "cloud_writes": false,
+  "sends_messages": false
+}
+
+

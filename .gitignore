@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+e2e.yaml
+cloudonly.yaml
+*.egg-info/
+

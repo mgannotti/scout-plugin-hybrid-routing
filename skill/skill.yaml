@@ -1,0 +1,33 @@
+slug: hybrid-routing
+title: Hybrid Contextual Inference
+summary: Route each task to the right model across cloud, on-device and org-hosted stacks, with an enforced egress boundary.
+version: 1.2.0
+public_safe: true
+type: skill
+category: agent-operations
+pack: scout-plugin-hybrid-routing
+
+author:
+  alias: mgann
+  name: Michael Gannotti
+  role: SE
+  discipline: Principal Solution Engineer
+  segment: Any
+  ou: Scout AgentOps
+
+roles: [Any]
+purpose: [routing, governance, privacy]
+personas: [technical]
+outputs: [json, markdown]
+requires: [python]
+setup: ../setup.md
+tags: [model-routing, hybrid-inference, local-models, egress, sensitivity, mip, privacy, delegation]
+capabilities: [reads-files, writes-files, shell, local-network]
+network_required: false
+cloud_writes: false
+notes: >
+  Network access is localhost-only for on-device backends. Reaching an
+  org-hosted endpoint requires network to that endpoint only. The router
+  itself performs no outbound calls.
+
+

@@ -1,0 +1,201 @@
+# Hybrid Contextual Inference — routing configuration for Microsoft Scout
+#
+# Every model field ships BLANK on purpose. Fill in only the models you
+# actually have. A router that guesses is a router that eventually sends
+# something somewhere you did not intend.
+#
+# Copy this file to your user override path:
+#   ~/.scout/hybrid_routing/routing_config.yaml
+# or run:  python -m hybrid_routing init
+#
+# ── Model reference format ─────────────────────────────────────────────
+#   scout/<model-id>            cloud, run via Scout's `task` tool
+#   local/<backend>/<model-id>  on-device, run over an OpenAI-compatible API
+#   org/<backend>/<model-id>    org-hosted, inside your tenant/network
+#
+# The scheme determines the egress class, which is what the sensitivity
+# policy enforces. `<backend>` names an entry in the `backends:` section
+# below — that is where the URL and auth live, never in the reference.
+#
+# To see the cloud model ids available in your own Scout install, run the
+# `m_list_models` tool (or check Settings → Model). Use the id exactly as it
+# appears there, prefixed with `scout/`.
+#
+# Placeholders like `<your-balanced-model>` below are illustrative — replace
+# them with your own ids. Blank fields are skipped, so anything you do not
+# configure simply falls through.
+
+# ── Backends ───────────────────────────────────────────────────────────
+# OpenAI-compatible endpoints for the local and org-hosted half of the
+# stack. Run `python -m hybrid_routing probe` to see what is reachable.
+#
+# `egress` MUST be accurate — it is the safety boundary, not a label.
+#   on-device    process on this machine
+#   org-tenant   inside your org's tenant or private network
+#
+# Never put an API key here. Name an environment variable instead.
+backends:
+  ollama:
+    base_url: "http://localhost:11434/v1"
+    egress: on-device
+    timeout: 180
+
+  lmstudio:
+    base_url: "http://localhost:1234/v1"
+    egress: on-device
+    timeout: 180
+
+  foundry:
+    # Microsoft Foundry Local. Port varies — `foundry service status`.
+    base_url: "http://localhost:5273/v1"
+    egress: on-device
+    timeout: 180
+
+  # Example org-hosted endpoint (Azure AI Foundry, internal vLLM, ...).
+  # Uncomment and point at your own deployment.
+  # tenant:
+  #   base_url: "https://<your-resource>.services.ai.azure.com/openai/v1"
+  #   egress: org-tenant
+  #   api_key_env: "AZURE_AI_FOUNDRY_KEY"
+  #   timeout: 180
+
+# ── Tiers ──────────────────────────────────────────────────────────────
+# Cost/capability tiers selected by task difficulty. `reasoning_effort`
+# is passed through to Scout's task tool for models that support it.
+tiers:
+  fast:
+    model: ""            # e.g. local/ollama/phi4-mini  or  scout/<your-fast-model>
+    reasoning_effort: low
+    description: "Quick chats, formatting, simple Q&A, acknowledgements"
+
+  balanced:
+    model: ""            # e.g. scout/<your-balanced-model>
+    reasoning_effort: medium
+    description: "Most work — code, research, analysis, drafting"
+
+  strong:
+    model: ""            # e.g. scout/<your-strong-model>
+    reasoning_effort: high
+    description: "Deep reasoning, architecture, multi-step strategy"
+
+# ── Roles ──────────────────────────────────────────────────────────────
+# A matched role overrides the difficulty tier. Leave a model blank to let
+# the tier handle that role. Cues match on word boundaries.
+roles:
+  coding:
+    model: ""            # e.g. scout/<your-coding-model>
+    reasoning_effort: high
+    description: "Code writing, debugging, refactoring"
+    cues: ["code", "debug", "refactor", "function", "class", "unit test",
+           "pytest", "stack trace", "traceback", "pull request", "git commit",
+           "compile", "API endpoint", "regression"]
+
+  research:
+    model: ""            # e.g. scout/<your-research-model>
+    description: "Literature review, source gathering, comparison"
+    cues: ["research", "paper", "arxiv", "literature", "cite", "citation",
+           "survey", "benchmark", "state of the art", "prior work"]
+
+  creative:
+    model: ""            # e.g. scout/<your-creative-model>
+    description: "Narrative, blog, social, marketing copy"
+    cues: ["blog post", "story", "narrative", "creative", "draft an article",
+           "social media post", "tweet", "headline", "tagline", "copywriting"]
+
+  strategy:
+    model: ""            # e.g. scout/<your-strong-model>
+    reasoning_effort: high
+    description: "Planning, architecture decisions, executive analysis"
+    cues: ["strategy", "strategic", "roadmap", "business plan", "go-to-market",
+           "competitive analysis", "SWOT", "prioritize", "trade-off",
+           "architecture decision", "operating model"]
+
+  vision:
+    model: ""            # e.g. scout/<your-research-model>
+    description: "Image, screenshot and diagram analysis"
+    cues: ["screenshot", "image", "diagram", "chart", "photo", "visual",
+           "look at this picture"]
+
+  general:
+    model: ""
+    description: "Default — no specific role matched"
+    cues: []
+
+# ── Sensitivity ────────────────────────────────────────────────────────
+# Two graded levels above normal, each with its own model.
+#
+#   confidential -> must run at org-tenant or tighter
+#   restricted   -> must run on-device
+#
+# If the required model is blank, matching content is BLOCKED rather than
+# downgraded to a cloud model. That is deliberate and is the main
+# behavioural difference from the Hermes original, which falls back to the
+# balanced cloud tier and defeats the whole purpose.
+sensitivity:
+  confidential_model: ""   # e.g. org/tenant/gpt-4o  or  local/ollama/qwen3
+  restricted_model: ""     # e.g. local/ollama/qwen3:8b
+
+  # Secrets, personal identifiers, health identifiers, top-label markers.
+  restricted_patterns:
+    - "(?i)\\b(api[_\\s-]?key|apikey|password|passwd|secret|client[_\\s-]?secret|access[_\\s-]?token|bearer|private[_\\s-]?key|connection[_\\s-]?string)\\b\\s*[:=]\\s*\\S+"
+    - "-----BEGIN (RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----"
+    - "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+    - "\\b(?:\\d[ -]?){13,16}\\b"
+    - "(?i)\\b(highly\\s+confidential|top\\s+secret|restricted)\\b"
+    - "(?i)\\b(patient|member)\\s+(id|mrn|record\\s+number)\\b"
+    - "(?i)\\bmrn\\s*[:#=]\\s*\\S+"
+    - "(?i)\\b(protected\\s+health\\s+information|\\bPHI\\b)"
+
+  # Internal business content — fine inside the tenant, not for public cloud.
+  confidential_patterns:
+    - "(?i)\\b(confidential|internal\\s+only|internal\\s+use\\s+only|proprietary|do\\s+not\\s+distribute|nda)\\b"
+    - "(?i)\\b(unreleased|pre[- ]release|unannounced|embargo(ed)?)\\b"
+    - "(?i)\\bmicrosoft\\s+internal\\b"
+
+# ── Difficulty ─────────────────────────────────────────────────────────
+# Heuristics; these work out of the box.
+difficulty:
+  hard_cues:
+    - "analyz"
+    - "architect"
+    - "debug"
+    - "refactor"
+    - "prove"
+    - "derive"
+    - "optimi[sz]"
+    - "trade[- ]?off"
+    - "step[- ]by[- ]step"
+    - "reason through"
+    - "root cause"
+    - "algorithm"
+    - "complexity"
+    - "strateg"
+    - "implement"
+    - "compare"
+    - "evaluate"
+    - "design (a|an|the)"
+    - "explain why"
+    - "walk me through"
+    - "plan (a|an|the|out)"
+  simple_cues:
+    - "^\\s*(hi|hey|hello|yo|sup|thanks|thank you|ty|ok|okay|k|yes|yep|no|nope|got it|cool|nice|great|good morning|good night|gm|gn)\\b"
+  hard_if_code_block: true
+  hard_if_long_input: 600
+  hard_if_many_words: 80
+  hard_if_many_lines: 8
+  simple_if_short_words: 4
+
+# ── Policy ─────────────────────────────────────────────────────────────
+# Optional global ceiling applied on top of the per-task one. Set to
+# `org-tenant` or `on-device` to cap ALL routing regardless of content —
+# useful for an air-gapped or high-compliance profile.
+policy:
+  max_egress: ""     # "", cloud-public, org-tenant, or on-device
+
+# ── Delegation ─────────────────────────────────────────────────────────
+# Set primary_model to the model your Scout session actually runs, so the
+# router knows when it can stay inline and preserve prompt caching.
+delegation:
+  primary_model: ""       # e.g. scout/<your-strong-model>
+  skip_for_tier: [fast]
+  skip_if_same_as_primary: true
