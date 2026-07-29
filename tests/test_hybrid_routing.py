@@ -35,6 +35,24 @@ from hybrid_routing import (
     url_is_loopback,
 )
 from hybrid_routing.egress import resolve_backend_egress
+
+
+def _capture_cli(argv: list[str]) -> str:
+    """Run the CLI in-process against the shipped config and capture stdout.
+
+    Pinned to the shipped default so results do not depend on whatever the
+    developer happens to have in their own user config.
+    """
+    import contextlib
+    import io
+
+    from hybrid_routing.cli import main
+    from hybrid_routing.config import DEFAULT_CONFIG
+
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        main(["--config", str(DEFAULT_CONFIG)] + argv)
+    return buffer.getvalue()
 from hybrid_routing.classify import CONFIDENTIAL, NORMAL, RESTRICTED, normalize_label
 from hybrid_routing.mcp_server import handle
 from hybrid_routing.router import ROUTE_BLOCKED, ROUTE_OK, ROUTE_UNCONFIGURED
@@ -44,7 +62,6 @@ from hybrid_routing.selftest import reference_config, run_selftest
 @pytest.fixture
 def router():
     return HybridRouter(reference_config())
-
 
 @pytest.fixture
 def cloud_only_router():
@@ -697,6 +714,26 @@ class TestProvenanceMode:
         cfg = reference_config()
         cfg["provenance"] = {"moode": "advisory"}
         assert any("moode" in p for p in HybridRouter(cfg).validate())
+
+
+    def test_probe_json_shape_matches_mcp(self, monkeypatch):
+        """CLI --json probe and the route_probe tool must parse identically.
+
+        They diverged in v1.3 — the CLI emitted a bare array while the tool
+        wrapped it — and a consumer written against one broke on the other.
+        """
+        import hybrid_routing.mcp_server as server
+
+        from hybrid_routing.config import DEFAULT_CONFIG
+        from hybrid_routing.config import load_config as real_load
+
+        monkeypatch.setattr(server, "_load", lambda: real_load(str(DEFAULT_CONFIG))[0])
+
+        cli_payload = json.loads(_capture_cli(["--json", "probe", "--configured-only"]))
+        mcp_payload = server._tool_route_probe({"configured_only": True})
+
+        assert set(cli_payload) == set(mcp_payload) == {"backends"}
+        assert isinstance(cli_payload["backends"], list)
 
 
 class TestMalformedInput:

@@ -161,7 +161,9 @@ def cmd_probe(args) -> int:
         config = {}
     results = probe(config, include_known=not args.configured_only)
     if args.json:
-        print(json.dumps(results, indent=2))
+        # Same shape as the route_probe MCP tool, so a caller can parse either
+        # source identically.
+        print(json.dumps({"backends": results}, indent=2))
         return EXIT_OK
     print()
     print("=" * 66)
