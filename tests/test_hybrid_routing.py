@@ -603,6 +603,102 @@ class TestSymbolSecrets:
         assert "###.##.####" in " ".join(signals)
 
 
+class TestProvenanceMode:
+    """v1.3 — the M365 provenance floor was hardcoded with no way to tune it."""
+
+    def _route(self, source="email", text="Summarize this thread", label=None, **prov):
+        cfg = reference_config()
+        if prov:
+            cfg["provenance"] = prov
+        return HybridRouter(cfg), HybridRouter(cfg).route(text, label=label, source=source)
+
+    def test_default_is_floor_preserving_v12_behaviour(self):
+        """Shipping a looser default would silently remove a control on upgrade."""
+        cfg = reference_config()
+        cfg.pop("provenance", None)
+        assert HybridRouter(cfg).route("Summarize this", source="email").sensitivity == CONFIDENTIAL
+
+    def test_floor_raises_the_level(self):
+        _, d = self._route(mode="floor")
+        assert d.sensitivity == CONFIDENTIAL
+
+    def test_advisory_records_but_does_not_raise(self):
+        _, d = self._route(mode="advisory")
+        assert d.sensitivity == NORMAL
+        assert any("advisory" in s for s in d.signals)
+
+    def test_off_is_silent(self):
+        _, d = self._route(mode="off")
+        assert d.sensitivity == NORMAL
+        assert not any("provenance" in s.lower() for s in d.signals)
+
+    def test_advisory_does_not_weaken_label_detection(self):
+        _, d = self._route(mode="advisory", label="Highly Confidential")
+        assert d.sensitivity == RESTRICTED
+
+    def test_advisory_does_not_weaken_pattern_detection(self):
+        _, d = self._route(text="api_key = sk-live-abcd1234", mode="advisory")
+        assert d.sensitivity == RESTRICTED
+
+    def test_per_source_override_can_floor_under_advisory(self):
+        cfg = reference_config()
+        cfg["provenance"] = {"mode": "advisory", "sources": {"sharepoint": "confidential"}}
+        router = HybridRouter(cfg)
+        assert router.route("Summarize", source="sharepoint").sensitivity == CONFIDENTIAL
+        assert router.route("Summarize", source="email").sensitivity == NORMAL
+
+    def test_per_source_override_can_exempt_under_floor(self):
+        cfg = reference_config()
+        cfg["provenance"] = {"mode": "floor", "sources": {"email": "normal"}}
+        router = HybridRouter(cfg)
+        assert router.route("Summarize", source="email").sensitivity == NORMAL
+        assert router.route("Summarize", source="teams").sensitivity == CONFIDENTIAL
+
+    def test_per_source_override_can_raise_to_restricted(self):
+        cfg = reference_config()
+        cfg["provenance"] = {"mode": "advisory", "sources": {"transcript": "restricted"}}
+        d = HybridRouter(cfg).route("Summarize", source="transcript")
+        assert d.sensitivity == RESTRICTED
+        assert d.egress == ON_DEVICE
+
+    @pytest.mark.parametrize("value", ["Advisory", "  ADVISORY  ", "advisory"])
+    def test_mode_casing_is_forgiven(self, value):
+        _, d = self._route(mode=value)
+        assert d.sensitivity == NORMAL
+
+    @pytest.mark.parametrize("value", ["adivsory", "none", "disabled", "no"])
+    def test_unreadable_mode_fails_closed_and_is_reported(self, value):
+        router, d = self._route(mode=value)
+        assert d.sensitivity == CONFIDENTIAL
+        assert any("provenance.mode" in p for p in router.validate())
+
+    def test_unreadable_default_level_fails_closed_and_is_reported(self):
+        router, d = self._route(mode="floor", default_level="konfidential")
+        assert d.sensitivity == CONFIDENTIAL
+        assert any("default_level" in p for p in router.validate())
+
+    def test_unreadable_source_override_fails_closed_and_is_reported(self):
+        cfg = reference_config()
+        cfg["provenance"] = {"mode": "advisory", "sources": {"email": "kinda-secret"}}
+        router = HybridRouter(cfg)
+        assert router.route("Summarize", source="email").sensitivity == CONFIDENTIAL
+        assert any("sources" in p for p in router.validate())
+
+    def test_non_m365_source_is_unaffected_by_floor(self):
+        _, d = self._route(source="web", mode="floor")
+        assert d.sensitivity == NORMAL
+
+    def test_provenance_is_a_known_config_section(self):
+        cfg = reference_config()
+        cfg["provenance"] = {"mode": "advisory"}
+        assert not any("provenance" in p for p in HybridRouter(cfg).validate())
+
+    def test_typoed_provenance_key_is_reported(self):
+        cfg = reference_config()
+        cfg["provenance"] = {"moode": "advisory"}
+        assert any("moode" in p for p in HybridRouter(cfg).validate())
+
+
 class TestMalformedInput:
     def test_invalid_yaml_is_a_config_error(self, tmp_path):
         path = tmp_path / "bad.yaml"

@@ -185,6 +185,37 @@ difficulty:
   hard_if_many_lines: 8
   simple_if_short_words: 4
 
+# ── Provenance ─────────────────────────────────────────────────────────
+# How much weight to give the M365 surface content came from, on its own.
+# Recognized sources: email, teams, calendar, sharepoint, onedrive, planner,
+# todo, transcript.
+#
+#   floor     raise anything from an M365 surface to `default_level`,
+#             regardless of what the text says. The default — content read
+#             out of a tenant is business content until proven otherwise.
+#   advisory  record the source in the decision signals but do NOT raise the
+#             level. MIP labels and content patterns still apply in full.
+#   off       ignore provenance entirely.
+#
+# `floor` is right for regulated environments. `advisory` suits an individual
+# whose M365 traffic is mostly routine — a blanket floor there sends every
+# email summary to the sensitivity model, which is usually the smallest one
+# available, and the quality drop makes people disable the feature outright.
+#
+# An unreadable mode or level fails closed to floor/confidential and is
+# reported by `status`.
+provenance:
+  mode: floor
+  default_level: confidential
+
+  # Optional per-source overrides. These win over `mode` in both directions —
+  # exempt a surface the mode would floor, or floor one it would ignore.
+  # Set a source to `normal` to exempt it.
+  sources: {}
+    # sharepoint: confidential
+    # transcript: restricted
+    # calendar: normal
+
 # ── Policy ─────────────────────────────────────────────────────────────
 # Optional global ceiling applied on top of the per-task one. Set to
 # `org-tenant` or `on-device` to cap ALL routing regardless of content —

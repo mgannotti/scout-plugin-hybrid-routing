@@ -46,12 +46,19 @@ DIFFICULTY_TO_TIER = {SIMPLE: "fast", STANDARD: "balanced", HARD: "strong"}
 
 # ── M365 provenance ────────────────────────────────────────────────────
 # Content read out of the user's tenant is business content by default, even
-# when it carries no explicit label. Scout reads these surfaces routinely;
-# treating them as public-cloud-safe by default would be wrong.
+# when it carries no explicit label. How much that matters is deployment-
+# specific, so it is configurable: a regulated environment wants every M365
+# read floored at confidential, while an individual mostly wants the label and
+# pattern signals and would find a blanket floor unusable.
 M365_SOURCES = frozenset(
     {"email", "teams", "calendar", "sharepoint", "onedrive", "planner", "todo", "transcript"}
 )
 PUBLIC_SOURCES = frozenset({"web", "user", "local", "repo", ""})
+
+PROVENANCE_OFF = "off"  # ignore provenance entirely
+PROVENANCE_ADVISORY = "advisory"  # record it, but do not raise the level
+PROVENANCE_FLOOR = "floor"  # raise to the configured level (default)
+PROVENANCE_MODES = (PROVENANCE_OFF, PROVENANCE_ADVISORY, PROVENANCE_FLOOR)
 
 # ── MIP label normalization ────────────────────────────────────────────
 _LABEL_RESTRICTED = ("highly confidential", "restricted", "secret", "top secret")
@@ -75,6 +82,22 @@ def normalize_label(label: str | None) -> str:
     if any(marker in text for marker in _LABEL_PUBLIC):
         return NORMAL
     return NORMAL
+
+
+def normalize_sensitivity(value: str | None) -> str | None:
+    """Normalize a sensitivity level name; None if unrecognized."""
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    return text if text in SENSITIVITY_LEVELS else None
+
+
+def normalize_provenance_mode(value: str | None) -> str | None:
+    """Normalize a provenance mode name; None if unrecognized."""
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    return text if text in PROVENANCE_MODES else None
 
 
 def max_sensitivity(*levels: str) -> str:
@@ -147,6 +170,59 @@ class Classifier:
                 self.pattern_errors.append(f"{where}[{index}] is not a valid regex: {exc}")
         return compiled
 
+    # ── Provenance ─────────────────────────────────────────────────────
+    def _provenance_cfg(self) -> dict:
+        return self._cfg.get("provenance", {}) or {}
+
+    def provenance_mode(self) -> str:
+        """Effective mode. An unreadable value fails closed to `floor`."""
+        raw = self._provenance_cfg().get("mode")
+        if raw in (None, ""):
+            return PROVENANCE_FLOOR
+        return normalize_provenance_mode(raw) or PROVENANCE_FLOOR
+
+    def _provenance_default_level(self) -> str:
+        raw = self._provenance_cfg().get("default_level")
+        if raw in (None, ""):
+            return CONFIDENTIAL
+        return normalize_sensitivity(raw) or CONFIDENTIAL
+
+    def _provenance_level(self, src: str) -> tuple[str | None, str]:
+        """Return (level to apply or None, explanation) for a source."""
+        cfg = self._provenance_cfg()
+        overrides = {
+            str(k).strip().lower(): v for k, v in (cfg.get("sources") or {}).items()
+        }
+
+        # A per-source entry wins over the mode, in either direction: it can
+        # exempt a surface the mode would floor, or floor one the mode ignores.
+        if src in overrides:
+            raw = overrides[src]
+            level = normalize_sensitivity(raw)
+            if level is None:
+                level = self._provenance_default_level()
+                return level, (
+                    f"provenance.sources[{src!r}] is {raw!r}, which is not a "
+                    f"sensitivity level; failing closed to {level}"
+                )
+            if level == NORMAL:
+                return None, f"provenance {src!r} configured as normal; no floor applied"
+            return level, f"provenance override {src!r} -> {level}"
+
+        if src not in M365_SOURCES:
+            return None, ""
+
+        mode = self.provenance_mode()
+        if mode == PROVENANCE_OFF:
+            return None, ""
+        if mode == PROVENANCE_ADVISORY:
+            return None, (
+                f"M365 provenance ({src}) noted; provenance.mode=advisory, so the "
+                f"level is unchanged — labels and content patterns still apply"
+            )
+        level = self._provenance_default_level()
+        return level, f"M365 provenance ({src}) -> {level} floor"
+
     # ── Sensitivity ────────────────────────────────────────────────────
     def classify_sensitivity(
         self, text: str, label: str | None = None, source: str | None = None
@@ -182,9 +258,12 @@ class Classifier:
         level = max_sensitivity(level, label_level)
 
         src = (source or "").strip().lower()
-        if src in M365_SOURCES:
-            signals.append(f"M365 provenance ({src}) -> confidential floor")
-            level = max_sensitivity(level, CONFIDENTIAL)
+        if src:
+            prov_level, explanation = self._provenance_level(src)
+            if explanation:
+                signals.append(explanation)
+            if prov_level:
+                level = max_sensitivity(level, prov_level)
 
         return level, signals
 

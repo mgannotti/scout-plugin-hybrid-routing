@@ -114,6 +114,44 @@ ways of *silently deleting* a control went unreported.
 | 7 | **medium** | Signal masking replaced alphanumerics but kept punctuation verbatim, so a symbol-only credential (`secret=+-*/`) was echoed intact. | every non-space character is masked |
 | 8 | **low** | Malformed YAML, bad UTF-8 and non-numeric timeouts escaped as tracebacks. | translated into `ConfigError` / `BackendError` |
 
+## Provenance
+
+Content read from an M365 surface is treated as business content by default,
+even when the text carries no marker. How much that should matter is
+deployment-specific, so it is configurable:
+
+```yaml
+provenance:
+  mode: floor              # floor (default) | advisory | off
+  default_level: confidential
+  sources:                 # optional per-source overrides
+    transcript: restricted
+    calendar: normal
+```
+
+| Mode | Behaviour |
+|---|---|
+| `floor` | Anything from an M365 surface is raised to `default_level`, regardless of content. **The default.** |
+| `advisory` | The source is recorded in the decision signals but does not raise the level. Labels and content patterns still apply in full. |
+| `off` | Provenance is ignored entirely. |
+
+`sources` entries win over `mode` in **both** directions — they can exempt a
+surface the mode would floor, or floor one it would ignore. Set a source to
+`normal` to exempt it.
+
+**Which to pick.** `floor` is right for regulated environments where any
+tenant-sourced content needs containment. `advisory` suits an individual whose
+M365 traffic is mostly routine: a blanket floor sends every email summary to
+the sensitivity model — typically the smallest one available — and the quality
+drop tends to make people disable the feature outright, which protects nothing.
+
+Under `advisory` the label and pattern signals are untouched, so a document
+labelled Highly Confidential or an email containing a key still routes to the
+restricted model.
+
+An unreadable `mode`, `default_level` or source override fails closed to
+`floor` / `confidential` and is reported by `status`.
+
 ## Limitations — read this before trusting it
 
 **Classification happens after the session model has already read the content.**
@@ -140,8 +178,10 @@ you have them; they are far stronger signals than the text scan.
   label drives routing directly. Checked most-restrictive-first, so
   "Highly Confidential" is not swallowed by the "Confidential" substring.
 - **M365 provenance** — `--source email|teams|sharepoint|calendar|transcript`
-  applies a `confidential` floor. Content read out of the tenant is business
-  content even when the text looks benign.
+  applies a `confidential` floor by default. Content read out of the tenant is
+  business content even when the text looks benign. Tunable via the
+  `provenance` config section (`floor` / `advisory` / `off`, plus per-source
+  overrides) — see [Provenance](#provenance).
 - **Real local execution** — Hermes delegates model execution to its own
   provider layer. Scout's `task` tool hosts only Scout's cloud models, so this
   plugin ships an OpenAI-compatible client covering Ollama, LM Studio, Foundry
@@ -253,7 +293,7 @@ hybrid_routing/
 
 data/routing_config.yaml   shipped default — every model field blank
 skill/                     Scout skill package
-tests/                     143 tests
+tests/                     164 tests
 ```
 
 ## Design notes
@@ -277,12 +317,13 @@ without reprinting the secret that triggered it.
 ## Testing
 
 ```bash
-python -m pytest        # 143 tests
+python -m pytest        # 164 tests
 ```
 
 ## License
 
 MIT — © 2026 Michael Gannotti. Derivative of `smfworks/hermes-plugin-hybrid-routing`,
 MIT © 2026 SMF Works. See [LICENSE](LICENSE) and [ATTRIBUTION.md](ATTRIBUTION.md).
+
 
 

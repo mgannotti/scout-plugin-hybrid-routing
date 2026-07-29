@@ -175,12 +175,31 @@ policy:
 
 Caps all routing regardless of content classification.
 
+## Optional: tune the M365 provenance floor
+
+By default, anything you tag `--source email|teams|sharepoint|…` is raised to
+`confidential` on the strength of its origin alone. That is the right default
+for regulated work, but on a personal setup it routes routine email summaries
+to your smallest model.
+
+```yaml
+provenance:
+  mode: advisory        # floor (default) | advisory | off
+  sources:
+    transcript: restricted    # still floor meeting transcripts
+```
+
+Under `advisory` the source is recorded in the decision signals but does not
+raise the level; MIP labels and content patterns still apply in full, so
+genuinely sensitive material still routes correctly.
+
 ## Troubleshooting
 
 | Symptom | Cause |
 |---|---|
 | `NOT CONFIGURED` | every model field is blank; fill in the config |
 | `ROUTING BLOCKED` | working as designed — no model inside the required boundary |
+| Everything from M365 blocks | `provenance.mode` is `floor` (the default) and no org/local model is configured — set `advisory`, or configure a sensitivity model |
 | `unknown scheme` | reference must start with `scout/`, `local/` or `org/` |
 | backend `down` in probe | runtime not running, or wrong port |
 | `expects an API key in $VAR, which is unset` | set the environment variable and restart Scout |

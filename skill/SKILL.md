@@ -81,6 +81,12 @@ item or a meeting transcript. Without those the router only sees the text, and
 a benign-looking summary request over confidential material will classify as
 `normal`.
 
+How much `source` matters on its own depends on the `provenance.mode` setting:
+`floor` (the default) raises any M365-sourced task to `confidential`,
+`advisory` records it without raising, and `off` ignores it. Pass `source`
+regardless — the config decides what to do with it, and under `advisory` it
+still shows up in the decision signals for audit.
+
 ### Step 2 — act on `execution`
 
 The decision carries an `execution` block that tells you exactly what to run.
@@ -147,6 +153,12 @@ parse.
 
 Set `policy.max_egress` to `org-tenant` or `on-device` to cap **all** routing
 regardless of content — an air-gapped or high-compliance profile.
+
+Set `provenance.mode` to control how much weight an M365 source carries on its
+own: `floor` (default) raises any tenant-sourced task to `confidential`,
+`advisory` records the source without raising the level, `off` ignores it.
+Per-source overrides under `provenance.sources` win over the mode in either
+direction.
 
 ## Guardrails
 

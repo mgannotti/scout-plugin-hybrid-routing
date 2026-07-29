@@ -20,8 +20,12 @@ from .classify import (
     CONFIDENTIAL,
     DIFFICULTY_TO_TIER,
     NORMAL,
+    PROVENANCE_MODES,
     RESTRICTED,
+    SENSITIVITY_LEVELS,
     Classifier,
+    normalize_provenance_mode,
+    normalize_sensitivity,
 )
 from .egress import (
     CHANNEL_SCOUT_TASK,
@@ -40,7 +44,16 @@ TIERS = ("fast", "balanced", "strong")
 # Recognized config keys. Anything else is a typo that silently does nothing,
 # which for a security control is a failure mode worth reporting.
 KNOWN_TOP_LEVEL_KEYS = frozenset(
-    {"backends", "tiers", "roles", "sensitivity", "difficulty", "policy", "delegation"}
+    {
+        "backends",
+        "tiers",
+        "roles",
+        "sensitivity",
+        "difficulty",
+        "policy",
+        "delegation",
+        "provenance",
+    }
 )
 KNOWN_SUBKEYS = {
     "sensitivity": frozenset(
@@ -53,6 +66,7 @@ KNOWN_SUBKEYS = {
     ),
     "policy": frozenset({"max_egress"}),
     "delegation": frozenset({"primary_model", "skip_for_tier", "skip_if_same_as_primary"}),
+    "provenance": frozenset({"mode", "default_level", "sources"}),
 }
 
 # Outcomes
@@ -208,6 +222,28 @@ class HybridRouter:
 
         # A protection rule that failed to compile is worse than no rule.
         problems.extend(self.classifier.pattern_errors)
+
+        # Provenance settings that cannot be read fail closed to `floor`, but
+        # the user should know their setting is not the one in effect.
+        prov = self.config.get("provenance", {}) or {}
+        raw_mode = prov.get("mode")
+        if raw_mode not in (None, "") and normalize_provenance_mode(raw_mode) is None:
+            problems.append(
+                f"provenance.mode is {raw_mode!r}, which is not one of "
+                f"{', '.join(PROVENANCE_MODES)}. Failing closed to 'floor'."
+            )
+        raw_level = prov.get("default_level")
+        if raw_level not in (None, "") and normalize_sensitivity(raw_level) is None:
+            problems.append(
+                f"provenance.default_level is {raw_level!r}, which is not one of "
+                f"{', '.join(SENSITIVITY_LEVELS)}. Failing closed to 'confidential'."
+            )
+        for name, value in (prov.get("sources") or {}).items():
+            if normalize_sensitivity(value) is None:
+                problems.append(
+                    f"provenance.sources[{name!r}] is {value!r}, which is not one of "
+                    f"{', '.join(SENSITIVITY_LEVELS)}. Failing closed."
+                )
 
         # A policy cap that cannot be understood must not silently do nothing.
         raw_cap = (self.config.get("policy", {}) or {}).get("max_egress")

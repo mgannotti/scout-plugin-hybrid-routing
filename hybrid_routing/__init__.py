@@ -36,7 +36,7 @@ from .router import (
     RoutingDecision,
 )
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 __all__ = [
     "Backend",
@@ -71,5 +71,6 @@ __all__ = [
     "ROUTE_UNCONFIGURED",
     "__version__",
 ]
+
 
 

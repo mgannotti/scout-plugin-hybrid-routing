@@ -32,7 +32,7 @@ from .router import HybridRouter
 from .selftest import run_selftest
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "hybrid-routing", "version": "1.2.0"}
+SERVER_INFO = {"name": "hybrid-routing", "version": "1.3.0"}
 
 TOOLS = [
     {
@@ -312,5 +312,6 @@ def main() -> int:  # pragma: no cover
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+
 
 
