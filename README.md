@@ -114,6 +114,36 @@ ways of *silently deleting* a control went unreported.
 | 7 | **medium** | Signal masking replaced alphanumerics but kept punctuation verbatim, so a symbol-only credential (`secret=+-*/`) was echoed intact. | every non-space character is masked |
 | 8 | **low** | Malformed YAML, bad UTF-8 and non-numeric timeouts escaped as tracebacks. | translated into `ConfigError` / `BackendError` |
 
+## Fourth-pass findings (v1.3.1)
+
+Both defects sit in the one payment-card rule carried over from the Hermes
+original, and both were still present upstream at the time of writing
+(`hybrid_contextual_routing/data/routing_config.yaml:131`). The old rule was
+`"\b(?:\d[ -]?){13,16}\b"`.
+
+| # | Severity | Bug | Fix |
+|---|---|---|---|
+| 1 | **high** | The `{13,16}` ceiling plus `\b` on both ends meant a **contiguous** run longer than 16 digits offered no position where the rule could start, so 17/18/19-digit PANs matched **nothing at all** — silently, not truncated. ISO/IEC 7812 permits PANs up to 19 digits, and 19-digit Visa (VPay) and UnionPay cards are in issue. A real card number reached a cloud model with nothing raised. | range widened to 13–19 via `"\b(?:\d[ -]?){12,18}\d\b"`; the trailing `\d` also stops the match swallowing a trailing separator |
+| 2 | **medium** | No value check, so any 13–16 digit run was classified restricted: ISBNs, order references, and columns of figures. Because a separator is allowed after *every* digit, nine two-digit numbers read as one run. Restricted content is **blocked** when no on-device model is configured, so ordinary documents stopped work. | the rule declares `validator: luhn` in the config; a match is only honoured if its digits satisfy the Luhn checksum |
+
+Pattern entries therefore accept a mapping as well as a plain string, so the
+value check stays visible in the config rather than hidden in Python:
+
+```yaml
+restricted_patterns:
+  - "\\b\\d{3}-\\d{2}-\\d{4}\\b"          # plain regex, unchanged
+  - pattern: "\\b(?:\\d[ -]?){12,18}\\d\\b"
+    validator: luhn                        # only match if Luhn-valid
+```
+
+An unknown validator name is reported by `validate()` and the rule is kept
+matching rather than dropped, consistent with third-pass finding 5: a
+protection rule that silently vanishes is worse than one that over-fires.
+
+Luhn is a checksum, not proof of a card: roughly one in ten random digit runs
+of a given length passes it. It removes the bulk of the false positives, not
+all of them.
+
 ## Provenance
 
 Content read from an M365 surface is treated as business content by default,

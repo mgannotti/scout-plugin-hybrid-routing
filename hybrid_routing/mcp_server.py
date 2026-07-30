@@ -12,11 +12,15 @@ Register with::
 
     {
       "name": "hybrid-routing",
-      "type": "stdio",
-      "command": "python",
-      "args": ["-m", "hybrid_routing.mcp_server"],
-      "env": {"PYTHONPATH": "<path to this repo>"}
+      "type": "command",
+      "command": "<path to python.exe>",
+      "args": ["<repo>/mcp_launcher.py"]
     }
+
+Launch `mcp_launcher.py` by absolute path rather than
+`-m hybrid_routing.mcp_server`: Scout normalizes the server entry and drops
+`cwd` and `env`, so a `-m` invocation cannot find the package. The launcher
+bootstraps its own import path.
 """
 
 from __future__ import annotations
@@ -303,10 +307,13 @@ def serve(stdin=None, stdout=None) -> int:
 
 
 def main() -> int:  # pragma: no cover
-    # Ensure the repo root is importable when launched as a bare script.
-    root = Path(__file__).resolve().parent.parent
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
+    """Entry point for `python -m hybrid_routing.mcp_server`.
+
+    This requires the package to already be importable — installed, or with the
+    repo root on PYTHONPATH. Hosts that drop `cwd`/`env` when spawning the
+    server should launch `mcp_launcher.py` by absolute path instead, which
+    bootstraps its own import path.
+    """
     return serve()
 
 

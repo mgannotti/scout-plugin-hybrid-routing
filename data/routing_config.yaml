@@ -140,7 +140,18 @@ sensitivity:
     - "(?i)\\b(api[_\\s-]?key|apikey|password|passwd|secret|client[_\\s-]?secret|access[_\\s-]?token|bearer|private[_\\s-]?key|connection[_\\s-]?string)\\b\\s*[:=]\\s*\\S+"
     - "-----BEGIN (RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----"
     - "\\b\\d{3}-\\d{2}-\\d{4}\\b"
-    - "\\b(?:\\d[ -]?){13,16}\\b"
+    # Payment card (PAN). ISO/IEC 7812 allows 13-19 digits, so the old
+    # {13,16} ceiling missed 17/18/19-digit PANs entirely: with \b on both
+    # ends, a contiguous run longer than 16 offers no position where the
+    # rule can start, so it matched nothing at all rather than matching
+    # partially. 19-digit Visa (VPay) and UnionPay cards are in issue today.
+    # The trailing \d (rather than another optional-separator unit) keeps the
+    # match from swallowing a trailing space.
+    # Luhn is what separates a card from an ISBN, an order reference or a
+    # column of figures; without it this rule fires on ordinary content, and
+    # restricted content is BLOCKED when no on-device model is configured.
+    - pattern: "\\b(?:\\d[ -]?){12,18}\\d\\b"
+      validator: luhn
     - "(?i)\\b(highly\\s+confidential|top\\s+secret|restricted)\\b"
     - "(?i)\\b(patient|member)\\s+(id|mrn|record\\s+number)\\b"
     - "(?i)\\bmrn\\s*[:#=]\\s*\\S+"

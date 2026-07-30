@@ -20,6 +20,7 @@ import re
 from dataclasses import dataclass, field
 
 from .egress import CLOUD_PUBLIC, ON_DEVICE, ORG_TENANT, normalize_egress, tighter
+from .validators import VALIDATORS
 
 # ── Sensitivity levels ─────────────────────────────────────────────────
 NORMAL = "normal"
@@ -131,6 +132,36 @@ class Classification:
         }
 
 
+class _ValidatedPattern:
+    """A compiled regex paired with a check on the matched value.
+
+    Duck-types the slice of `re.Pattern` the classifier uses, so call sites
+    are unchanged. `search` walks every regex match and returns the first one
+    the validator accepts — a rejected match must not mask a real one later
+    in the text, e.g. an order number sitting in front of a card number.
+    """
+
+    __slots__ = ("regex", "_validator", "validator_name")
+
+    def __init__(self, regex: re.Pattern, validator, validator_name: str):
+        self.regex = regex
+        self._validator = validator
+        self.validator_name = validator_name
+
+    def search(self, text: str):
+        for match in self.regex.finditer(text or ""):
+            if self._validator(match.group(0)):
+                return match
+        return None
+
+    @property
+    def pattern(self) -> str:
+        return self.regex.pattern
+
+    def __repr__(self) -> str:  # pragma: no cover - diagnostic only
+        return f"_ValidatedPattern({self.regex.pattern!r}, validator={self.validator_name!r})"
+
+
 class Classifier:
     """Compiles config-driven patterns once and classifies task text."""
 
@@ -161,13 +192,56 @@ class Classifier:
             if cues:
                 self._role_cues[role_name] = [_compile_cue(cue) for cue in cues]
 
-    def _compile_all(self, patterns, where: str) -> list[re.Pattern]:
+    def _compile_all(self, patterns, where: str) -> list:
+        """Compile a pattern list.
+
+        An entry is either a plain regex string, or a mapping declaring a
+        value validator:
+
+            - "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+            - pattern: "\\b(?:\\d[ -]?){12,18}\\d\\b"
+              validator: luhn
+
+        Plain strings compile to a bare `re.Pattern` exactly as before; only
+        entries that ask for a validator are wrapped. Both forms expose
+        `.search(text)`, so callers do not care which they were given.
+        """
         compiled = []
-        for index, pattern in enumerate(patterns or []):
+        for index, entry in enumerate(patterns or []):
+            pattern, validator_name = entry, None
+            if isinstance(entry, dict):
+                pattern = entry.get("pattern")
+                validator_name = entry.get("validator")
+                unknown = set(entry) - {"pattern", "validator"}
+                if unknown:
+                    self.pattern_errors.append(
+                        f"{where}[{index}] has unknown key(s): {', '.join(sorted(unknown))}"
+                    )
+
             try:
-                compiled.append(re.compile(pattern, re.IGNORECASE))
+                rx = re.compile(pattern, re.IGNORECASE)
             except (re.error, TypeError) as exc:
                 self.pattern_errors.append(f"{where}[{index}] is not a valid regex: {exc}")
+                continue
+
+            if validator_name is None:
+                compiled.append(rx)
+                continue
+
+            validator = VALIDATORS.get(str(validator_name).strip().lower())
+            if validator is None:
+                # Fail closed. Dropping the rule would leave the config
+                # claiming a protection that is not running; keeping it
+                # unvalidated silently widens it. Report and keep the regex.
+                self.pattern_errors.append(
+                    f"{where}[{index}] names unknown validator "
+                    f"{validator_name!r}; known validators: "
+                    f"{', '.join(sorted(VALIDATORS))}"
+                )
+                compiled.append(rx)
+                continue
+
+            compiled.append(_ValidatedPattern(rx, validator, str(validator_name)))
         return compiled
 
     # ── Provenance ─────────────────────────────────────────────────────

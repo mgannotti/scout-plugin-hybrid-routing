@@ -113,22 +113,45 @@ Add to `~/.scout/m-mcp-servers.json` under `servers`:
   "builtin": false,
   "config": {
     "name": "hybrid-routing",
-    "type": "stdio",
-    "command": "python",
-    "args": ["-m", "hybrid_routing.mcp_server"],
-    "cwd": "<absolute path to this repo>"
+    "type": "command",
+    "command": "<absolute path to python.exe>",
+    "args": ["<absolute path to this repo>/mcp_launcher.py"]
   },
   "tools": ["*", "route_classify", "route_status", "route_test", "route_probe", "route_infer"]
 }
 ```
 
-Restart Scout. Verify with `route_status`.
+Use **absolute paths for both**, and launch `mcp_launcher.py` rather than
+`-m hybrid_routing.mcp_server`.
 
-Sanity-check the server without Scout:
+Scout normalizes this entry when it loads it, and **drops `cwd` and `env`**
+without warning. A `-m` invocation then fails with `ModuleNotFoundError: No
+module named 'hybrid_routing'`, because nothing ever put the package on
+`sys.path`. The launcher sits at the repo root and bootstraps its own import
+path, so it works with no working directory and no environment.
 
-```bash
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | python -m hybrid_routing.mcp_server
+(If you have installed the package with `pip install -e .`, then
+`"args": ["-m", "hybrid_routing.mcp_server"]` works too.)
+
+Then enable it. Scout does not auto-enable a hand-added server, so add an entry
+under `permissions.servers` in `~/.scout/m-settings.json`:
+
+```json
+"hybrid-routing": { "enabled": true, "autoApprove": false }
 ```
+
+Restart Scout and verify by asking it to run `route_status`.
+
+Sanity-check the server without Scout first — from a *different* directory, to
+prove it does not depend on the working directory:
+
+```powershell
+cd C:\
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | python "<repo>\mcp_launcher.py"
+```
+
+You should get a JSON response listing five tools. If you get a traceback, the
+paths in the config are wrong.
 
 ## 6. Install the skill
 

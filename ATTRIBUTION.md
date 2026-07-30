@@ -19,7 +19,12 @@ Carried over substantially unchanged:
   and `simple_cues` lists and the `hard_if_code_block` / `hard_if_long_input` /
   `hard_if_many_words` / `hard_if_many_lines` / `simple_if_short_words`
   thresholds are taken verbatim from the upstream config.
-- **Two sensitivity patterns** — the US SSN and payment-card regexes.
+- **Two sensitivity patterns** — the US SSN and payment-card regexes. The
+  payment-card regex has since been corrected here (see "Fourth-pass findings"
+  in the README): the upstream `{13,16}` form misses 17–19 digit PANs entirely
+  and has no Luhn check. The defect was still present upstream at
+  `hybrid_contextual_routing/data/routing_config.yaml:131` as of commit
+  `88198cf`.
 - **The config schema shape** — `tiers` / `roles` / `sensitivity` / `difficulty`
   / `delegation` sections, tier names (`fast` / `balanced` / `strong`), and the
   blank-by-default policy so nothing routes until you configure it.

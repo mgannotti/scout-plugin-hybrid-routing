@@ -12,6 +12,8 @@ original this plugin is modelled on:
 from __future__ import annotations
 
 import json
+import os
+import sys
 import threading
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -736,6 +738,45 @@ class TestProvenanceMode:
         assert isinstance(cli_payload["backends"], list)
 
 
+    def test_launcher_runs_without_cwd_or_pythonpath(self, tmp_path):
+        """The launcher must work when the host drops cwd and env.
+
+        Scout normalizes its MCP server entries and discards `cwd` and `env`,
+        so `-m hybrid_routing.mcp_server` fails with ModuleNotFoundError. The
+        launcher exists to survive that; this runs it the way Scout does.
+        """
+        import subprocess
+        from pathlib import Path as _Path
+
+        launcher = _Path(__file__).resolve().parent.parent / "mcp_launcher.py"
+        assert launcher.exists(), "mcp_launcher.py is missing from the repo root"
+
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k.upper() not in {"PYTHONPATH", "PYTHONHOME"}
+        }
+        proc = subprocess.run(
+            [sys.executable, str(launcher)],
+            input='{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n',
+            capture_output=True,
+            text=True,
+            cwd=str(tmp_path),  # deliberately not the repo
+            env=env,
+            timeout=60,
+        )
+        assert proc.returncode == 0, proc.stderr
+        payload = json.loads(proc.stdout.strip().splitlines()[0])
+        names = {t["name"] for t in payload["result"]["tools"]}
+        assert names == {
+            "route_classify",
+            "route_status",
+            "route_test",
+            "route_probe",
+            "route_infer",
+        }
+
+
 class TestMalformedInput:
     def test_invalid_yaml_is_a_config_error(self, tmp_path):
         path = tmp_path / "bad.yaml"
@@ -872,3 +913,154 @@ def test_selftest_fully_passes():
     failures = [c["name"] for c in results["cases"] if not c["passed"]]
     assert not failures, f"self-test failures: {failures}"
     assert results["passed"] == results["total"]
+
+
+# ── Payment card detection ─────────────────────────────────────────────
+# Regression tests for two defects in the card rule inherited from the
+# Hermes original (`sensitivity.restricted_patterns`, the `{13,16}` entry):
+#
+#   1. no value check, so any 13-16 digit run — ISBNs, order references, a
+#      column of two-digit figures — was classified restricted. Restricted
+#      content is BLOCKED when no on-device model is configured, so ordinary
+#      documents stopped work.
+#   2. the 13-16 ceiling combined with a trailing \b meant a contiguous run
+#      longer than 16 digits offered no position where the rule could start,
+#      so 17/18/19-digit PANs matched nothing at all — silently, not
+#      truncated. ISO/IEC 7812 allows PANs up to 19 digits and 19-digit Visa
+#      (VPay) and UnionPay cards are in issue.
+def _luhn_complete(prefix: str) -> str:
+    """Return `prefix` plus the check digit that makes it Luhn-valid."""
+    from hybrid_routing.validators import luhn
+
+    for digit in "0123456789":
+        if luhn(prefix + digit):
+            return prefix + digit
+    raise AssertionError(f"no check digit completes {prefix!r}")
+
+
+class TestLuhn:
+    def test_known_valid_pans(self):
+        from hybrid_routing.validators import luhn
+
+        for pan in ("4111111111111111", "378282246310005", "5555555555554444"):
+            assert luhn(pan), pan
+
+    def test_separators_ignored(self):
+        from hybrid_routing.validators import luhn
+
+        assert luhn("4111 1111 1111 1111")
+        assert luhn("4111-1111-1111-1111")
+
+    def test_single_digit_change_fails(self):
+        from hybrid_routing.validators import luhn
+
+        assert not luhn("4111111111111112")
+
+    def test_short_runs_rejected(self):
+        """Under 12 digits the checksum is too weak to mean anything."""
+        from hybrid_routing.validators import luhn
+
+        assert not luhn("18")
+        assert not luhn("000000")
+
+
+class TestPaymentCardFalseNegatives:
+    """PANs longer than 16 digits must not sail past the detector."""
+
+    @pytest.mark.parametrize("length", [13, 14, 15, 16, 17, 18, 19])
+    def test_contiguous_pan_of_every_valid_length_is_restricted(self, router, length):
+        pan = _luhn_complete("4" + "1" * (length - 2))
+        assert len(pan) == length
+        level, signals = router.classifier.classify_sensitivity(f"card {pan}")
+        assert level == RESTRICTED, f"{length}-digit PAN {pan} was not caught"
+        assert signals
+
+    @pytest.mark.parametrize("sep", ["", " ", "-"])
+    def test_nineteen_digit_pan_in_every_format(self, router, sep):
+        pan = _luhn_complete("622126000000000000")
+        assert len(pan) == 19
+        text = sep.join(pan[i:i + 4] for i in range(0, len(pan), 4)) if sep else pan
+        level, _ = router.classifier.classify_sensitivity(f"card {text}")
+        assert level == RESTRICTED, f"19-digit PAN {text!r} was not caught"
+
+    def test_nineteen_digit_pan_is_blocked_not_routed_to_cloud(self, cloud_only_router):
+        """The consequence that matters: it must never reach a cloud model."""
+        pan = _luhn_complete("622126000000000000")
+        decision = cloud_only_router.route(f"charge this card {pan}")
+        assert decision.status == ROUTE_BLOCKED
+
+
+class TestPaymentCardFalsePositives:
+    """Digit runs that are not cards must not block ordinary work."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "ISBN 978-0-306-40615-7",
+            "Unit totals 12 14 11 09 22 18 07 31 04",
+            "Order 1234567890123",
+            "invoice ref 1234567812345678",
+            "call 555 0100 555 0101 555",
+        ],
+    )
+    def test_non_card_digit_runs_are_not_restricted(self, router, text):
+        level, signals = router.classifier.classify_sensitivity(text)
+        assert level != RESTRICTED, f"{text!r} wrongly restricted: {signals}"
+
+    def test_rejected_match_does_not_mask_a_later_real_one(self, router):
+        """A failing run early in the text must not stop the scan."""
+        level, _ = router.classifier.classify_sensitivity(
+            "Order 1234567890123, paid with card 4111111111111111"
+        )
+        assert level == RESTRICTED
+
+    def test_long_pan_signal_is_still_redacted(self, router):
+        pan = _luhn_complete("622126000000000000")
+        _, signals = router.classifier.classify_sensitivity(f"card {pan}")
+        assert pan not in " ".join(signals)
+
+
+class TestPatternValidatorConfig:
+    """The validator is declared in config, so config errors must surface."""
+
+    def test_plain_string_patterns_still_supported(self):
+        cfg = reference_config()
+        cfg["sensitivity"]["restricted_patterns"] = [r"\bhunter2\b"]
+        router = HybridRouter(cfg)
+        assert not router.classifier.pattern_errors
+        level, _ = router.classifier.classify_sensitivity("the password is hunter2")
+        assert level == RESTRICTED
+
+    def test_unknown_validator_is_reported_not_silently_ignored(self):
+        cfg = reference_config()
+        cfg["sensitivity"]["restricted_patterns"] = [
+            {"pattern": r"\d{13,19}", "validator": "verhoeff"}
+        ]
+        problems = HybridRouter(cfg).validate()
+        assert any("unknown validator" in p for p in problems)
+
+    def test_unknown_validator_keeps_the_rule_active(self):
+        """Failing closed: an unvalidated rule still matches, and is reported."""
+        cfg = reference_config()
+        cfg["sensitivity"]["restricted_patterns"] = [
+            {"pattern": r"\bhunter2\b", "validator": "verhoeff"}
+        ]
+        level, _ = HybridRouter(cfg).classifier.classify_sensitivity("pw hunter2")
+        assert level == RESTRICTED
+
+    def test_invalid_regex_in_mapping_form_is_reported(self):
+        cfg = reference_config()
+        cfg["sensitivity"]["restricted_patterns"] = [{"pattern": "bad(", "validator": "luhn"}]
+        problems = HybridRouter(cfg).validate()
+        assert any("not a valid regex" in p for p in problems)
+
+    def test_unknown_key_in_mapping_form_is_reported(self):
+        cfg = reference_config()
+        cfg["sensitivity"]["restricted_patterns"] = [
+            {"pattern": r"\d{13}", "validator": "luhn", "typo": 1}
+        ]
+        problems = HybridRouter(cfg).validate()
+        assert any("unknown key" in p for p in problems)
+
+    def test_shipped_config_has_no_pattern_errors(self):
+        assert not HybridRouter(reference_config()).classifier.pattern_errors
